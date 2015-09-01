@@ -3,9 +3,9 @@ This is command line tool to merge minimaps from custom clients in Hafen (http:/
 
 Arguments:
 
-* -d <folder>: define input folder
-* -z <session>: create zoom layers for specific <session> and place them into "zoommap" folder
-* -c: remove all non-standard maps (size != 100x100)
+* ```-d <folder>```: define input folder
+* ```-z <session>```: create zoom layers for specific ```<session>``` and place them into "zoommap" folder
+* ```-c```: remove all non-standard maps (size != 100x100)
 
 
 Default folder is "sessions", default behavior is "cross-merge" (program tries to merge sessions with each other)
