@@ -11,6 +11,7 @@ Arguments:
 Default folder is "sessions", default behavior is "cross-merge" (program tries to merge sessions with each other)
 
 Usage example:
+
 ```map-merger``` - this will try to merge all sessions inside "sessions"  
 
 ```map-merger -d maps``` - this will try to merge all sessions inside "maps"  
