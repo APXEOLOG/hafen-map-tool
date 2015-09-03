@@ -222,6 +222,7 @@ func getImage(basePath string, x int, y int) image.Image {
 	if err != nil {
 		return nil
 	}
+	file.Close()
 	return image
 }
 
