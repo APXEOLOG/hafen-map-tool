@@ -6,6 +6,8 @@ Arguments:
 * ```-d <folder>```: define input folder
 * ```-z <session>```: create zoom layers for specific ```<session>``` and place them into "zoommap" folder
 * ```-c```: remove all non-standard maps (size != 100x100)
+* ```-t <count>```: remove sessions with ```tiles < count``` from result (good for removing cave sessions)
+* ```-o <folder>```: specify output folder for zoom mode (instead of default "zoommap")
 
 
 Default folder is "sessions", default behavior is "cross-merge" (program tries to merge sessions with each other)
@@ -15,6 +17,8 @@ Usage example:
 ```map-merger``` - this will try to merge all sessions inside "sessions"  
 
 ```map-merger -d maps``` - this will try to merge all sessions inside "maps"  
+
+```map-merger -d maps -t 20``` - this will try to merge all sessions inside "maps" and remove all resulting folders with less then 20 tiles
 
 ```map-merger -z "2015-08-30 12.47.06"``` - this will generate zoom layers from "sessions/2015-08-30 12.47.06"
 
