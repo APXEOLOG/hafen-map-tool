@@ -222,6 +222,7 @@ func getImage(basePath string, x int, y int) image.Image {
 	if err != nil {
 		return nil
 	}
+	file.Close()
 	return image
 }
 
@@ -281,15 +282,15 @@ func generateTiles(workingDirectory, session, outputPath string) {
 		}
 		fmt.Printf("Size: %d, %d -> %d, %d\n", minX, minY, maxX, maxY)
 		// Generate next zoom level
-		for y := minY; y <= maxY; y+=2 {
-			for x := minX; x <= maxX; x+=2 {
-				fileP := filepath.Join(zoomedPath, fmt.Sprintf("tile_%d_%d.png", int(x / 2), int(y / 2)))
+		for y := int(minY / 2); y <= int(maxY / 2); y++ {
+			for x := int(minX / 2); x <= int(maxX / 2); x++ {
+				fileP := filepath.Join(zoomedPath, fmt.Sprintf("tile_%d_%d.png", x, y))
 				generatedImage := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{200, 200}})
 				transparent := color.RGBA{0, 0, 0, 255}
 				draw.Draw(generatedImage, generatedImage.Bounds(), &image.Uniform{transparent}, image.ZP, draw.Src)
 				for j = 0; j < 2; j++ {
 					for i = 0; i < 2; i++ {
-						imageZ := getImage(folder, x + i, y + j)
+						imageZ := getImage(folder, x * 2 + i, y * 2 + j)
 						if imageZ != nil {
 							draw.Draw(generatedImage,
 								image.Rectangle{image.Point{i * 100, j * 100}, image.Point{(i + 1) * 100, (j + 1) * 100}},
