@@ -243,6 +243,65 @@ func generatePicture(workingDirectory, session string) {
 	return
 }
 
+func generateZoom(sourcePath string, outputPath string, tileSize int, composeCount int, resizeToSize bool) {
+	metadata := getSessionMetaData(sourcePath)
+	fmt.Printf("Tiles: %d\n", len(metadata.Content))
+	// Find bounds
+	var minX, minY, maxX, maxY, i, j int = 0, 0, 0, 0, 0, 0
+	for i = 0; i < len(metadata.Content); i++ {
+		if int(metadata.Content[i].X) < minX {
+			minX = int(metadata.Content[i].X)
+		}
+		if int(metadata.Content[i].X) > maxX {
+			maxX = int(metadata.Content[i].X)
+		}
+		if int(metadata.Content[i].Y) < minY {
+			minY = int(metadata.Content[i].Y)
+		}
+		if int(metadata.Content[i].Y) > maxY {
+			maxY = int(metadata.Content[i].Y)
+		}
+	}
+	fmt.Printf("Size: %d, %d -> %d, %d\n", minX, minY, maxX, maxY)
+	// Generate next zoom level
+	for y := int(minY / composeCount) - 1; y <= int(maxY / composeCount) + 1; y++ {
+		for x := int(minX / composeCount) - 1; x <= int(maxX / composeCount) + 1; x++ {
+			fileP := filepath.Join(outputPath, fmt.Sprintf("tile_%d_%d.png", x, y))
+			generatedImage := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{tileSize * composeCount, tileSize * composeCount}})
+			transparent := color.RGBA{0, 0, 0, 0}
+			draw.Draw(generatedImage, generatedImage.Bounds(), &image.Uniform{transparent}, image.ZP, draw.Src)
+			usedTiles := 0
+			for j = 0; j < composeCount; j++ {
+				for i = 0; i < composeCount; i++ {
+					imageZ := getImage(sourcePath, x * composeCount + i, y * composeCount + j)
+					if imageZ != nil {
+						draw.Draw(generatedImage,
+							image.Rectangle{image.Point{i * tileSize, j * tileSize}, image.Point{(i + 1) * tileSize, (j + 1) * tileSize}},
+							imageZ,
+							image.ZP,
+							draw.Src)
+						usedTiles++
+					}
+				}
+			}
+			if usedTiles == 0 {
+				continue
+			}
+			fileHandle, err := os.OpenFile(fileP, os.O_WRONLY | os.O_TRUNC | os.O_CREATE, 0777)
+			if err != nil {
+				fmt.Printf("Cannot create zoom file: %s\n", err.Error())
+			} else {
+				var resized image.Image = generatedImage
+				if resizeToSize {
+					resized = resize.Resize(uint(tileSize), uint(tileSize), generatedImage, resize.Bilinear)
+				}
+				png.Encode(fileHandle, resized)
+				fileHandle.Close()
+			}
+		}
+	}
+}
+
 func generateTiles(workingDirectory, session, outputPath string) {
 	dirPath := filepath.Join(workingDirectory, session)
 
@@ -252,64 +311,19 @@ func generateTiles(workingDirectory, session, outputPath string) {
 		fmt.Printf("Cannot create output folder (%s): %s\n", outputPath, err.Error())
 		return
 	}
-	// Copy session as zoom level 5
+
+	// Generate zoom level 5
 	zoomedPath := filepath.Join(outputPath, "5")
 	os.Mkdir(zoomedPath, 0777)
-	copySessionFiles(dirPath, zoomedPath)
+	tileSize := 100
+	composeCount := 4
+	generateZoom(dirPath, zoomedPath, tileSize, composeCount, false)
 
 	for zoom := 4; zoom > 0; zoom-- {
 		folder := filepath.Join(outputPath, strconv.Itoa(zoom + 1))
 		zoomedPath := filepath.Join(outputPath, strconv.Itoa(zoom))
 		os.Mkdir(zoomedPath, 0777)
-
-		metadata := getSessionMetaData(folder)
-		fmt.Printf("Tiles: %d\n", len(metadata.Content))
-		// Find bounds
-		var minX, minY, maxX, maxY, i, j int = 0, 0, 0, 0, 0, 0
-		for i = 0; i < len(metadata.Content); i++ {
-			if int(metadata.Content[i].X) < minX {
-				minX = int(metadata.Content[i].X)
-			}
-			if int(metadata.Content[i].X) > maxX {
-				maxX = int(metadata.Content[i].X)
-			}
-			if int(metadata.Content[i].Y) < minY {
-				minY = int(metadata.Content[i].Y)
-			}
-			if int(metadata.Content[i].Y) > maxY {
-				maxY = int(metadata.Content[i].Y)
-			}
-		}
-		fmt.Printf("Size: %d, %d -> %d, %d\n", minX, minY, maxX, maxY)
-		// Generate next zoom level
-		for y := int(minY / 2); y <= int(maxY / 2); y++ {
-			for x := int(minX / 2); x <= int(maxX / 2); x++ {
-				fileP := filepath.Join(zoomedPath, fmt.Sprintf("tile_%d_%d.png", x, y))
-				generatedImage := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{200, 200}})
-				transparent := color.RGBA{0, 0, 0, 255}
-				draw.Draw(generatedImage, generatedImage.Bounds(), &image.Uniform{transparent}, image.ZP, draw.Src)
-				for j = 0; j < 2; j++ {
-					for i = 0; i < 2; i++ {
-						imageZ := getImage(folder, x * 2 + i, y * 2 + j)
-						if imageZ != nil {
-							draw.Draw(generatedImage,
-								image.Rectangle{image.Point{i * 100, j * 100}, image.Point{(i + 1) * 100, (j + 1) * 100}},
-								imageZ,
-								image.ZP,
-								draw.Src)
-						}
-					}
-				}
-				fileHandle, err := os.OpenFile(fileP, os.O_WRONLY | os.O_TRUNC | os.O_CREATE, 0777)
-				if err != nil {
-					fmt.Printf("Cannot create zoom file: %s\n", err.Error())
-				} else {
-					resized := resize.Resize(100, 100, generatedImage, resize.Bilinear)
-					png.Encode(fileHandle, resized)
-					fileHandle.Close()
-				}
-			}
-		}
+		generateZoom(folder, zoomedPath, tileSize * composeCount, 2, true)
 	}
 }
 

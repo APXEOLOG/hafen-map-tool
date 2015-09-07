@@ -121,7 +121,7 @@ var mapSource = "al"; // "al"
 /* Start of Surface Map Type */
 function SurfaceMapType(src) {
   this.mapSource = src;
-  this.tileSize = new google.maps.Size(100, 100);
+  this.tileSize = new google.maps.Size(400, 400);
 }
 
 SurfaceMapType.prototype.minZoom = 1;
@@ -131,8 +131,8 @@ function getTileDiv(coord, zoom, ownerDocument) {
   var div = ownerDocument.createElement('DIV');
   var url = "";
   url = "zoommap/" + zoom + "/tile_" + coord.x + "_" + coord.y + '.png';
-  div.style.width = '100px';
-  div.style.height = '100px';
+  div.style.width = '400px';
+  div.style.height = '400px';
   div.style.backgroundImage = "url('" + url + "')";
   div.style.backgroundSize = 'cover';
   return div;
