@@ -9,6 +9,7 @@ import (
 	"os"
 	"crypto/md5"
 	"encoding/json"
+	"encoding/binary"
 	"time"
 	"bytes"
 	"container/list"
@@ -26,7 +27,7 @@ import (
 var SESSION_FOLDER string = "sessions"
 
 type MinimapMetaData struct {
-	HashSimple []byte
+	Hash []byte
 	Filename string
 	X int32
 	Y int32
@@ -47,14 +48,50 @@ type MinimapMetaDataPair struct {
 	second MinimapMetaData
 }
 
+// Using biom borders to generate random-tolerance tile hash
+func generateSmartHash(imagePath string) []byte {
+	var invalid_hash []byte = nil
+	file, err := os.Open(imagePath)
+	if err != nil {
+		fmt.Printf("Cannot generate image hash #1\n")
+		return invalid_hash
+	}
+	defer file.Close()
+	tileImage, err := png.Decode(file)
+	if err != nil {
+		fmt.Printf("Cannot generate image hash #2: %s\n", err.Error())
+		return invalid_hash
+	}
+	bounds := tileImage.Bounds()
+	h := md5.New()
+	blackCount := 0
+	pixelsCount := 0
+	// some tiles contain artifacts near the borders
+	for x := 5; x < bounds.Max.X - 5; x++ {
+		for y := 5; y< bounds.Max.Y - 5; y++ {
+			pixel := tileImage.At(x, y)
+			r, g, b, _ := pixel.RGBA()
+			if r == 0 && g == 0 && b == 0 {
+				binary.Write(h, binary.LittleEndian, []byte(strconv.Itoa(x)))
+				binary.Write(h, binary.LittleEndian, []byte(strconv.Itoa(y)))
+				blackCount++
+			}
+			pixelsCount++
+		}
+	}
+	if blackCount == 0 || blackCount == pixelsCount {
+		return invalid_hash
+	}
+	return h.Sum(nil)
+}
+
 func generateMinimapMetaData(files []os.FileInfo, basePath string) []MinimapMetaData {
 	buffer := make([]MinimapMetaData, len(files))
 	for i := 0; i < len(files); i++ {
 		var x, y int32 = 0, 0
 		fmt.Sscanf(files[i].Name(), "tile_%d_%d.png", &x, &y)
-		filecontent, _ := ioutil.ReadFile(filepath.Join(basePath, files[i].Name()))
-		hash := md5.Sum(filecontent)
-		buffer[i] = MinimapMetaData{HashSimple: hash[:], Filename: filepath.Join(basePath, files[i].Name()), X: x, Y: y }
+		hash := generateSmartHash(filepath.Join(basePath, files[i].Name()))
+		buffer[i] = MinimapMetaData{Hash: hash[:], Filename: filepath.Join(basePath, files[i].Name()), X: x, Y: y }
 	}
 	return buffer
 }
@@ -85,7 +122,10 @@ func areSessionsMergeable(source SessionMetaData, destination SessionMetaData) (
 	hits := list.New()
 	for i:= 0; i < len(source.Content); i++ {
 		for j:= 0; j < len(destination.Content); j++ {
-			if bytes.Compare(source.Content[i].HashSimple, destination.Content[j].HashSimple) == 0 {
+			if source.Content[i].Hash == nil || source.Content[i].Hash == nil {
+				continue
+			}
+			if bytes.Compare(source.Content[i].Hash, destination.Content[j].Hash) == 0 {
 				offset := SPoint{source.Content[i].X - destination.Content[j].X, source.Content[i].Y - destination.Content[j].Y}
 				offsetMap[offset] = offsetMap[offset] + 1
 				hits.PushBack(MinimapMetaDataPair{source.Content[i], destination.Content[j]})
