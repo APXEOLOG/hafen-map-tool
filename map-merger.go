@@ -22,6 +22,7 @@ import (
 	"image/color"
 	"strconv"
 	"github.com/nfnt/resize"
+	"github.com/droundy/goopt"
 )
 
 var SESSION_FOLDER string = "sessions"
@@ -96,14 +97,6 @@ func generateSimpleHash(imagePath string) []byte {
 	h := md5.New()
 	h.Write(filecontent)
 	return h.Sum(nil)
-}
-
-func getBorderHashMethod() HashMethod {
-	return HashMethod{CodeName: "border", Func: generateBorderHash}
-}
-
-func getSimpleHashMethod() HashMethod {
-	return HashMethod{CodeName: "simple", Func: generateSimpleHash}
 }
 
 func generateMinimapMetaData(files []os.FileInfo, basePath string, hashMethod HashMethod) []MinimapMetaData {
@@ -400,57 +393,59 @@ func generateTiles(workingDirectory, session, outputPath string, hashMethod Hash
 }
 
 func main() {
-	var mode, session string = "merger", ""
-	// Output folder for zoommode
-	var outputFodler string = "zoommap"
-	// Remove non-standard sessions
-	var removeNonStandard bool = false
-	// Session trimming
-	var trimSessions bool = false
-	var trimSessionsCount int = 0
-	// Hashing method
-	var hashMethod HashMethod = getSimpleHashMethod()
+	goopt.Summary = "Command line tool to merge minimaps from custom clients in Hafen."
+	var sessionFodler = goopt.StringWithLabel([]string{"-d", "--sessions-dir"}, "sessions", "<path>",
+	                                          "Specify input folder (instead of default \"sessions\")")
+	var mode = goopt.Alternatives([]string{"-m", "--mode"}, []string{"merger", "zoomer", "picture"},
+	                              "Specify mode (instead of default \"merger\")")
+	var zoomPath = goopt.StringWithLabel([]string{"-z", "--zoom"}, "", "<session>", 
+	                                     "Create zoom layers for specific <session> and place them into \"zoommap\" folder")
+	var picturePath = goopt.StringWithLabel([]string{"-p", "--picture"}, "", "<session>",
+	                                        "Create single map picture for specific <session>")
+	var outputFodler = goopt.StringWithLabel([]string{"-o", "--output-dir"}, "zoommap", "<path>",
+	                                         "Specify output folder for zoom mode (instead of default \"zoommap\")")
+	var trimSessions = goopt.IntWithLabel([]string{"-t", "--trim"}, -1, "<count>",
+	                                      "Remove sessions with tiles < <count> from result (good for removing cave sessions)")
+	var removeNonStandard = goopt.Flag([]string{"-c", "--clean-non-standard"}, []string{},
+	                                   "Remove all non-standard maps (size != 100x100)", "")
+	var hashCode = goopt.Alternatives([]string{"--hash-method"}, []string{"simple", "border"},
+	                                  "Specify hash method (instead of default \"simple\")")
 
 	// Parse CMD
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-d": SESSION_FOLDER = args[i + 1]
-			i++
-			break
-		case "-z": mode = "zoomer"
-			session = args[i + 1]
-			i++
-			break
-		case "-o": outputFodler = args[i + 1]
-			i++
-			break
-		case "-p": mode = "picture"
-			session = args[i + 1]
-			i++
-			break
-		case "-t": trimSessions = true
-			trimSessionsCount, _ = strconv.Atoi(args[i + 1])
-			i++
-			break
-		case "-c": removeNonStandard = true
-			break
-		case "-b": hashMethod = getBorderHashMethod()
-			break
-		}
+	goopt.Parse(nil)
+
+	// Force change mode for backward compatibility
+	if *picturePath != "" && *mode == "merger" {
+		*mode = "picture"
+	}
+	if *zoomPath != "" && *mode == "merger" {
+		*mode = "zoomer"
+	}
+
+	SESSION_FOLDER = *sessionFodler
+
+	var hashMethod HashMethod
+	switch *hashCode {
+	case "simple":
+		hashMethod = HashMethod{CodeName: *hashCode, Func: generateSimpleHash}
+		break
+	case "border":
+		hashMethod = HashMethod{CodeName: *hashCode, Func: generateBorderHash}
+		break
+	default: panic("Unrecognized hash method!") // this should never happen!
 	}
 
 	workingDirectory, _ := filepath.Abs(SESSION_FOLDER)
 
 	// Generate zoom levels for specific session
-	if mode == "zoomer" {
-		generateTiles(workingDirectory, session, outputFodler, hashMethod)
+	if *mode == "zoomer" {
+		generateTiles(workingDirectory, *zoomPath, *outputFodler, hashMethod)
 		return
 	}
 
 	// Generate single picture for specific session
-	if mode == "picture" {
-		generatePicture(workingDirectory, session)
+	if *mode == "picture" {
+		generatePicture(workingDirectory, *picturePath)
 		return
 	}
 
@@ -461,7 +456,7 @@ func main() {
 		return
 	}
 
-	if removeNonStandard == true {
+	if *removeNonStandard == true {
 		// Remove all sessions with tile size != 100x100
 		for j := 0; j < len(files); j++ {
 			tiles, _ := ioutil.ReadDir(filepath.Join(workingDirectory, files[j].Name()))
@@ -507,8 +502,8 @@ func main() {
 	var sessionsJS string = "var sessionsJS = ["
 	for j := 0; j < len(files); j++ {
 		tiles, _ := ioutil.ReadDir(filepath.Join(workingDirectory, files[j].Name()))
-		if trimSessions == true {
-			if len(tiles) < trimSessionsCount {
+		if *trimSessions > 0 {
+			if len(tiles) < *trimSessions {
 				err := os.RemoveAll(filepath.Join(workingDirectory, files[j].Name()))
 				if err != nil {
 					fmt.Printf("Cannot trim session %s: %s\n", files[j].Name(), err.Error())
