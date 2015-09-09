@@ -367,7 +367,7 @@ func generateZoom(sourcePath string, outputPath string, tileSize int, composeCou
 	}
 }
 
-func generateTiles(workingDirectory, session, outputPath string, hashMethod HashMethod) {
+func generateTiles(workingDirectory, session, outputPath string, composeCount int, hashMethod HashMethod) {
 	dirPath := filepath.Join(workingDirectory, session)
 
 	os.RemoveAll(outputPath)
@@ -381,7 +381,6 @@ func generateTiles(workingDirectory, session, outputPath string, hashMethod Hash
 	zoomedPath := filepath.Join(outputPath, "5")
 	os.Mkdir(zoomedPath, 0777)
 	tileSize := 100
-	composeCount := 4
 	generateZoom(dirPath, zoomedPath, tileSize, composeCount, false, hashMethod)
 
 	for zoom := 4; zoom > 0; zoom-- {
@@ -398,8 +397,10 @@ func main() {
 	                                          "Specify input folder (instead of default \"sessions\")")
 	var mode = goopt.Alternatives([]string{"-m", "--mode"}, []string{"merger", "zoomer", "picture"},
 	                              "Specify mode (instead of default \"merger\")")
-	var zoomPath = goopt.StringWithLabel([]string{"-z", "--zoom"}, "", "<session>", 
+	var zoomPath = goopt.StringWithLabel([]string{"-z", "--zoom"}, "", "<session>",
 	                                     "Create zoom layers for specific <session> and place them into \"zoommap\" folder")
+	var zoomSize = goopt.IntWithLabel([]string{"--zoom-tile-size"}, 100, "<size>",
+	                                  "Specify generated tiles size (instead of default 100)")
 	var picturePath = goopt.StringWithLabel([]string{"-p", "--picture"}, "", "<session>",
 	                                        "Create single map picture for specific <session>")
 	var outputFodler = goopt.StringWithLabel([]string{"-o", "--output-dir"}, "zoommap", "<path>",
@@ -437,9 +438,15 @@ func main() {
 
 	workingDirectory, _ := filepath.Abs(SESSION_FOLDER)
 
+	if *zoomSize % 100 != 0 {
+		fmt.Println("Tile size must be in multiples of 100")
+		return
+	}
+	var composeCount = int(*zoomSize / 100)
+
 	// Generate zoom levels for specific session
 	if *mode == "zoomer" {
-		generateTiles(workingDirectory, *zoomPath, *outputFodler, hashMethod)
+		generateTiles(workingDirectory, *zoomPath, *outputFodler, composeCount, hashMethod)
 		return
 	}
 
