@@ -9,6 +9,7 @@ import (
 	"os"
 	"crypto/md5"
 	"encoding/json"
+	"encoding/binary"
 	"time"
 	"bytes"
 	"container/list"
@@ -21,12 +22,18 @@ import (
 	"image/color"
 	"strconv"
 	"github.com/nfnt/resize"
+	"github.com/droundy/goopt"
 )
 
 var SESSION_FOLDER string = "sessions"
 
+type HashMethod struct {
+	CodeName string
+	Func func(string) []byte
+}
+
 type MinimapMetaData struct {
-	HashSimple []byte
+	Hash []byte
 	Filename string
 	X int32
 	Y int32
@@ -39,6 +46,7 @@ type SPoint struct {
 
 type SessionMetaData struct {
 	CreationDate int64
+	Hash string
 	Content []MinimapMetaData
 }
 
@@ -47,34 +55,88 @@ type MinimapMetaDataPair struct {
 	second MinimapMetaData
 }
 
-func generateMinimapMetaData(files []os.FileInfo, basePath string) []MinimapMetaData {
+// Using biom borders to generate slow but random-tolerance tile hash
+func generateBorderHash(imagePath string) []byte {
+	var invalidHash []byte = nil
+	file, err := os.Open(imagePath)
+	if err != nil {
+		fmt.Printf("Cannot generate image hash #1\n")
+		return invalidHash
+	}
+	defer file.Close()
+	tileImage, err := png.Decode(file)
+	if err != nil {
+		fmt.Printf("Cannot generate image '%s' hash #2: %s\n", imagePath, err.Error())
+		return invalidHash
+	}
+	bounds := tileImage.Bounds()
+	h := md5.New()
+	blackCount := 0
+	pixelsCount := 0
+	// some tiles contain artifacts near the borders
+	for x := 5; x < bounds.Max.X - 5; x++ {
+		for y := 5; y< bounds.Max.Y - 5; y++ {
+			pixel := tileImage.At(x, y)
+			r, g, b, _ := pixel.RGBA()
+			if r == 0 && g == 0 && b == 0 {
+				binary.Write(h, binary.LittleEndian, []byte(strconv.Itoa(x)))
+				binary.Write(h, binary.LittleEndian, []byte(strconv.Itoa(y)))
+				blackCount++
+			}
+			pixelsCount++
+		}
+	}
+	if blackCount == 0 || blackCount == pixelsCount {
+		return invalidHash
+	}
+	return h.Sum(nil)
+}
+
+func generateSimpleHash(imagePath string) []byte {
+	filecontent, _ := ioutil.ReadFile(filepath.Join(imagePath))
+	h := md5.New()
+	h.Write(filecontent)
+	return h.Sum(nil)
+}
+
+func generateMinimapMetaData(files []os.FileInfo, basePath string, hashMethod HashMethod) []MinimapMetaData {
 	buffer := make([]MinimapMetaData, len(files))
 	for i := 0; i < len(files); i++ {
 		var x, y int32 = 0, 0
 		fmt.Sscanf(files[i].Name(), "tile_%d_%d.png", &x, &y)
-		filecontent, _ := ioutil.ReadFile(filepath.Join(basePath, files[i].Name()))
-		hash := md5.Sum(filecontent)
-		buffer[i] = MinimapMetaData{HashSimple: hash[:], Filename: filepath.Join(basePath, files[i].Name()), X: x, Y: y }
+		hash := hashMethod.Func(filepath.Join(basePath, files[i].Name()))
+		buffer[i] = MinimapMetaData{Hash: hash[:], Filename: filepath.Join(basePath, files[i].Name()), X: x, Y: y }
 	}
 	return buffer
 }
 
+func regenerateSessionMetaData(folder string, hashMethod HashMethod) SessionMetaData {
+	var metadata SessionMetaData
+	metaDataFilePath := filepath.Join(folder, "metadata.json")
+	os.Remove(metaDataFilePath)
+	parsedTime, _ := time.Parse("2006-01-02 15.04.05", folder)
+	minimaps, _ := ioutil.ReadDir(folder)
+	metadata = SessionMetaData{CreationDate: parsedTime.Unix(), Hash: hashMethod.CodeName, Content: generateMinimapMetaData(minimaps, folder, hashMethod)}
+	encodedData, _ := json.Marshal(metadata)
+	err := ioutil.WriteFile(metaDataFilePath, encodedData, 0777)
+	if err != nil {
+		fmt.Printf("Error while saving metadata.json: %s\n", err.Error())
+	}
+	return metadata
+}
+
 // Argument is absolute path to directory
-func getSessionMetaData(folder string) SessionMetaData {
+func getSessionMetaData(folder string, hashMethod HashMethod) SessionMetaData {
 	var metadata SessionMetaData
 	metaDataFilePath := filepath.Join(folder, "metadata.json")
 	data, err := ioutil.ReadFile(metaDataFilePath)
 	if err != nil {
-		parsedTime, _ := time.Parse("2006-01-02 15.04.05", folder)
-		minimaps, _ := ioutil.ReadDir(folder)
-		metadata = SessionMetaData{CreationDate: parsedTime.Unix(), Content: generateMinimapMetaData(minimaps, folder)}
-		encodedData, _ := json.Marshal(metadata)
-		err := ioutil.WriteFile(metaDataFilePath, encodedData, 0777)
-		if err != nil {
-			fmt.Printf("Error while saving metadata.json: %s\n", err.Error())
-		}
+		metadata = regenerateSessionMetaData(folder, hashMethod)
 	} else {
 		json.Unmarshal(data, &metadata)
+	}
+	if metadata.Hash != hashMethod.CodeName {
+		metadata = regenerateSessionMetaData(folder, hashMethod)
 	}
 	return metadata
 }
@@ -85,7 +147,10 @@ func areSessionsMergeable(source SessionMetaData, destination SessionMetaData) (
 	hits := list.New()
 	for i:= 0; i < len(source.Content); i++ {
 		for j:= 0; j < len(destination.Content); j++ {
-			if bytes.Compare(source.Content[i].HashSimple, destination.Content[j].HashSimple) == 0 {
+			if source.Content[i].Hash == nil || source.Content[i].Hash == nil {
+				continue
+			}
+			if bytes.Compare(source.Content[i].Hash, destination.Content[j].Hash) == 0 {
 				offset := SPoint{source.Content[i].X - destination.Content[j].X, source.Content[i].Y - destination.Content[j].Y}
 				offsetMap[offset] = offsetMap[offset] + 1
 				hits.PushBack(MinimapMetaDataPair{source.Content[i], destination.Content[j]})
@@ -170,15 +235,15 @@ func copyFileContents(src, dst string) (err error) {
 }
 
 // Arguments are absolute paths to directory
-func mergeFolders(sourcePath string, destinationPath string) bool {
+func mergeFolders(sourcePath string, destinationPath string, hashMethod HashMethod) bool {
 	_, sinfo := os.Stat(sourcePath)
 	_, dinfo := os.Stat(destinationPath)
 	if os.IsNotExist(sinfo) || os.IsNotExist(dinfo) {
 		return false
 	}
 
-	sourceMetaData := getSessionMetaData(sourcePath)
-	destinationMetaData := getSessionMetaData(destinationPath)
+	sourceMetaData := getSessionMetaData(sourcePath, hashMethod)
+	destinationMetaData := getSessionMetaData(destinationPath, hashMethod)
 	success, offsetX, offsetY := areSessionsMergeable(sourceMetaData, destinationMetaData)
 	if success == true {
 		fmt.Printf("Sessions are mergeable (%d, %d)\n", offsetX, offsetY)
@@ -243,7 +308,66 @@ func generatePicture(workingDirectory, session string) {
 	return
 }
 
-func generateTiles(workingDirectory, session, outputPath string) {
+func generateZoom(sourcePath string, outputPath string, tileSize int, composeCount int, resizeToSize bool, hashMethod HashMethod) {
+	metadata := getSessionMetaData(sourcePath, hashMethod)
+	fmt.Printf("Tiles: %d\n", len(metadata.Content))
+	// Find bounds
+	var minX, minY, maxX, maxY, i, j int = 0, 0, 0, 0, 0, 0
+	for i = 0; i < len(metadata.Content); i++ {
+		if int(metadata.Content[i].X) < minX {
+			minX = int(metadata.Content[i].X)
+		}
+		if int(metadata.Content[i].X) > maxX {
+			maxX = int(metadata.Content[i].X)
+		}
+		if int(metadata.Content[i].Y) < minY {
+			minY = int(metadata.Content[i].Y)
+		}
+		if int(metadata.Content[i].Y) > maxY {
+			maxY = int(metadata.Content[i].Y)
+		}
+	}
+	fmt.Printf("Size: %d, %d -> %d, %d\n", minX, minY, maxX, maxY)
+	// Generate next zoom level
+	for y := int(minY / composeCount) - 1; y <= int(maxY / composeCount) + 1; y++ {
+		for x := int(minX / composeCount) - 1; x <= int(maxX / composeCount) + 1; x++ {
+			fileP := filepath.Join(outputPath, fmt.Sprintf("tile_%d_%d.png", x, y))
+			generatedImage := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{tileSize * composeCount, tileSize * composeCount}})
+			transparent := color.RGBA{0, 0, 0, 0}
+			draw.Draw(generatedImage, generatedImage.Bounds(), &image.Uniform{transparent}, image.ZP, draw.Src)
+			usedTiles := 0
+			for j = 0; j < composeCount; j++ {
+				for i = 0; i < composeCount; i++ {
+					imageZ := getImage(sourcePath, x * composeCount + i, y * composeCount + j)
+					if imageZ != nil {
+						draw.Draw(generatedImage,
+							image.Rectangle{image.Point{i * tileSize, j * tileSize}, image.Point{(i + 1) * tileSize, (j + 1) * tileSize}},
+							imageZ,
+							image.ZP,
+							draw.Src)
+						usedTiles++
+					}
+				}
+			}
+			if usedTiles == 0 {
+				continue
+			}
+			fileHandle, err := os.OpenFile(fileP, os.O_WRONLY | os.O_TRUNC | os.O_CREATE, 0777)
+			if err != nil {
+				fmt.Printf("Cannot create zoom file: %s\n", err.Error())
+			} else {
+				var resized image.Image = generatedImage
+				if resizeToSize {
+					resized = resize.Resize(uint(tileSize), uint(tileSize), generatedImage, resize.Bilinear)
+				}
+				png.Encode(fileHandle, resized)
+				fileHandle.Close()
+			}
+		}
+	}
+}
+
+func generateTiles(workingDirectory, session, outputPath string, composeCount int, hashMethod HashMethod) {
 	dirPath := filepath.Join(workingDirectory, session)
 
 	os.RemoveAll(outputPath)
@@ -252,115 +376,83 @@ func generateTiles(workingDirectory, session, outputPath string) {
 		fmt.Printf("Cannot create output folder (%s): %s\n", outputPath, err.Error())
 		return
 	}
-	// Copy session as zoom level 5
+
+	// Generate zoom level 5
 	zoomedPath := filepath.Join(outputPath, "5")
 	os.Mkdir(zoomedPath, 0777)
-	copySessionFiles(dirPath, zoomedPath)
+	tileSize := 100
+	generateZoom(dirPath, zoomedPath, tileSize, composeCount, false, hashMethod)
 
 	for zoom := 4; zoom > 0; zoom-- {
 		folder := filepath.Join(outputPath, strconv.Itoa(zoom + 1))
 		zoomedPath := filepath.Join(outputPath, strconv.Itoa(zoom))
 		os.Mkdir(zoomedPath, 0777)
-
-		metadata := getSessionMetaData(folder)
-		fmt.Printf("Tiles: %d\n", len(metadata.Content))
-		// Find bounds
-		var minX, minY, maxX, maxY, i, j int = 0, 0, 0, 0, 0, 0
-		for i = 0; i < len(metadata.Content); i++ {
-			if int(metadata.Content[i].X) < minX {
-				minX = int(metadata.Content[i].X)
-			}
-			if int(metadata.Content[i].X) > maxX {
-				maxX = int(metadata.Content[i].X)
-			}
-			if int(metadata.Content[i].Y) < minY {
-				minY = int(metadata.Content[i].Y)
-			}
-			if int(metadata.Content[i].Y) > maxY {
-				maxY = int(metadata.Content[i].Y)
-			}
-		}
-		fmt.Printf("Size: %d, %d -> %d, %d\n", minX, minY, maxX, maxY)
-		// Generate next zoom level
-		for y := int(minY / 2); y <= int(maxY / 2); y++ {
-			for x := int(minX / 2); x <= int(maxX / 2); x++ {
-				fileP := filepath.Join(zoomedPath, fmt.Sprintf("tile_%d_%d.png", x, y))
-				generatedImage := image.NewRGBA(image.Rectangle{image.Point{0, 0}, image.Point{200, 200}})
-				transparent := color.RGBA{0, 0, 0, 255}
-				draw.Draw(generatedImage, generatedImage.Bounds(), &image.Uniform{transparent}, image.ZP, draw.Src)
-				for j = 0; j < 2; j++ {
-					for i = 0; i < 2; i++ {
-						imageZ := getImage(folder, x * 2 + i, y * 2 + j)
-						if imageZ != nil {
-							draw.Draw(generatedImage,
-								image.Rectangle{image.Point{i * 100, j * 100}, image.Point{(i + 1) * 100, (j + 1) * 100}},
-								imageZ,
-								image.ZP,
-								draw.Src)
-						}
-					}
-				}
-				fileHandle, err := os.OpenFile(fileP, os.O_WRONLY | os.O_TRUNC | os.O_CREATE, 0777)
-				if err != nil {
-					fmt.Printf("Cannot create zoom file: %s\n", err.Error())
-				} else {
-					resized := resize.Resize(100, 100, generatedImage, resize.Bilinear)
-					png.Encode(fileHandle, resized)
-					fileHandle.Close()
-				}
-			}
-		}
+		generateZoom(folder, zoomedPath, tileSize * composeCount, 2, true, hashMethod)
 	}
 }
 
 func main() {
-	var mode, session string = "merger", ""
-	// Output folder for zoommode
-	var outputFodler string = "zoommap"
-	// Remove non-standard sessions
-	var removeNonStandard bool = false
-	// Session trimming
-	var trimSessions bool = false
-	var trimSessionsCount int = 0
+	goopt.Summary = "Command line tool to merge minimaps from custom clients in Hafen."
+	var sessionFodler = goopt.StringWithLabel([]string{"-d", "--sessions-dir"}, "sessions", "<path>",
+	                                          "Specify input folder (instead of default \"sessions\")")
+	var mode = goopt.Alternatives([]string{"-m", "--mode"}, []string{"merger", "zoomer", "picture"},
+	                              "Specify mode (instead of default \"merger\")")
+	var zoomPath = goopt.StringWithLabel([]string{"-z", "--zoom"}, "", "<session>",
+	                                     "Create zoom layers for specific <session> and place them into \"zoommap\" folder")
+	var zoomSize = goopt.IntWithLabel([]string{"--zoom-tile-size"}, 100, "<size>",
+	                                  "Specify generated tiles size (instead of default 100)")
+	var picturePath = goopt.StringWithLabel([]string{"-p", "--picture"}, "", "<session>",
+	                                        "Create single map picture for specific <session>")
+	var outputFodler = goopt.StringWithLabel([]string{"-o", "--output-dir"}, "zoommap", "<path>",
+	                                         "Specify output folder for zoom mode (instead of default \"zoommap\")")
+	var trimSessions = goopt.IntWithLabel([]string{"-t", "--trim"}, -1, "<count>",
+	                                      "Remove sessions with tiles < <count> from result (good for removing cave sessions)")
+	var removeNonStandard = goopt.Flag([]string{"-c", "--clean-non-standard"}, []string{},
+	                                   "Remove all non-standard maps (size != 100x100)", "")
+	var hashCode = goopt.Alternatives([]string{"--hash-method"}, []string{"simple", "border"},
+	                                  "Specify hash method (instead of default \"simple\")")
 
 	// Parse CMD
-	args := os.Args[1:]
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-d": SESSION_FOLDER = args[i + 1]
-			i++
-			break
-		case "-z": mode = "zoomer"
-			session = args[i + 1]
-			i++
-			break
-		case "-o": outputFodler = args[i + 1]
-			i++
-			break
-		case "-p": mode = "picture"
-			session = args[i + 1]
-			i++
-			break
-		case "-t": trimSessions = true
-			trimSessionsCount, _ = strconv.Atoi(args[i + 1])
-			i++
-			break
-		case "-c": removeNonStandard = true
-			break
-		}
+	goopt.Parse(nil)
+
+	// Force change mode for backward compatibility
+	if *picturePath != "" && *mode == "merger" {
+		*mode = "picture"
+	}
+	if *zoomPath != "" && *mode == "merger" {
+		*mode = "zoomer"
+	}
+
+	SESSION_FOLDER = *sessionFodler
+
+	var hashMethod HashMethod
+	switch *hashCode {
+	case "simple":
+		hashMethod = HashMethod{CodeName: *hashCode, Func: generateSimpleHash}
+		break
+	case "border":
+		hashMethod = HashMethod{CodeName: *hashCode, Func: generateBorderHash}
+		break
+	default: panic("Unrecognized hash method!") // this should never happen!
 	}
 
 	workingDirectory, _ := filepath.Abs(SESSION_FOLDER)
 
+	if *zoomSize % 100 != 0 {
+		fmt.Println("Tile size must be in multiples of 100")
+		return
+	}
+	var composeCount = int(*zoomSize / 100)
+
 	// Generate zoom levels for specific session
-	if mode == "zoomer" {
-		generateTiles(workingDirectory, session, outputFodler)
+	if *mode == "zoomer" {
+		generateTiles(workingDirectory, *zoomPath, *outputFodler, composeCount, hashMethod)
 		return
 	}
 
 	// Generate single picture for specific session
-	if mode == "picture" {
-		generatePicture(workingDirectory, session)
+	if *mode == "picture" {
+		generatePicture(workingDirectory, *picturePath)
 		return
 	}
 
@@ -371,7 +463,7 @@ func main() {
 		return
 	}
 
-	if removeNonStandard == true {
+	if *removeNonStandard == true {
 		// Remove all sessions with tile size != 100x100
 		for j := 0; j < len(files); j++ {
 			tiles, _ := ioutil.ReadDir(filepath.Join(workingDirectory, files[j].Name()))
@@ -405,7 +497,7 @@ func main() {
 			if err != nil { continue }
 			if dirInfo.IsDir() == false { continue }
 
-			res := mergeFolders(filepath.Join(workingDirectory, files[i].Name()), filepath.Join(workingDirectory, coreFolder.Name()))
+			res := mergeFolders(filepath.Join(workingDirectory, files[i].Name()), filepath.Join(workingDirectory, coreFolder.Name()), hashMethod)
 			if res == true {
 				fmt.Printf("Merged (%s, %s)\n", coreFolder.Name(), files[i].Name())
 			} else {
@@ -417,8 +509,8 @@ func main() {
 	var sessionsJS string = "var sessionsJS = ["
 	for j := 0; j < len(files); j++ {
 		tiles, _ := ioutil.ReadDir(filepath.Join(workingDirectory, files[j].Name()))
-		if trimSessions == true {
-			if len(tiles) < trimSessionsCount {
+		if *trimSessions > 0 {
+			if len(tiles) < *trimSessions {
 				err := os.RemoveAll(filepath.Join(workingDirectory, files[j].Name()))
 				if err != nil {
 					fmt.Printf("Cannot trim session %s: %s\n", files[j].Name(), err.Error())
