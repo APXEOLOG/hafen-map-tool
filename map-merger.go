@@ -367,7 +367,7 @@ func generateZoom(sourcePath string, outputPath string, tileSize int, composeCou
 	}
 }
 
-func generateTiles(workingDirectory, session, outputPath string, composeCount int, hashMethod HashMethod) {
+func generateTiles(workingDirectory, session, outputPath string, composeCount int, hashMethod HashMethod, zoomMin int, zoomMax int) {
 	dirPath := filepath.Join(workingDirectory, session)
 
 	os.RemoveAll(outputPath)
@@ -378,12 +378,12 @@ func generateTiles(workingDirectory, session, outputPath string, composeCount in
 	}
 
 	// Generate zoom level 5
-	zoomedPath := filepath.Join(outputPath, "5")
+	zoomedPath := filepath.Join(outputPath, strconv.Itoa(zoomMax))
 	os.Mkdir(zoomedPath, 0777)
 	tileSize := 100
 	generateZoom(dirPath, zoomedPath, tileSize, composeCount, false, hashMethod)
 
-	for zoom := 4; zoom > 0; zoom-- {
+	for zoom := zoomMax - 1; zoom >= zoomMin; zoom-- {
 		folder := filepath.Join(outputPath, strconv.Itoa(zoom + 1))
 		zoomedPath := filepath.Join(outputPath, strconv.Itoa(zoom))
 		os.Mkdir(zoomedPath, 0777)
@@ -401,6 +401,10 @@ func main() {
 	                                     "Create zoom layers for specific <session> and place them into \"zoommap\" folder")
 	var zoomSize = goopt.IntWithLabel([]string{"--zoom-tile-size"}, 100, "<size>",
 	                                  "Specify generated tiles size (instead of default 100)")
+	var zoomMax = goopt.IntWithLabel([]string{"--zoom-max"}, 5, "<num>",
+	                                  "Specify zoom max (instead of default 5)")
+	var zoomMin = goopt.IntWithLabel([]string{"--zoom-min"}, 1, "<num>",
+	                                  "Specify zoom min (instead of default 1)")
 	var picturePath = goopt.StringWithLabel([]string{"-p", "--picture"}, "", "<session>",
 	                                        "Create single map picture for specific <session>")
 	var outputFodler = goopt.StringWithLabel([]string{"-o", "--output-dir"}, "zoommap", "<path>",
@@ -446,7 +450,7 @@ func main() {
 
 	// Generate zoom levels for specific session
 	if *mode == "zoomer" {
-		generateTiles(workingDirectory, *zoomPath, *outputFodler, composeCount, hashMethod)
+		generateTiles(workingDirectory, *zoomPath, *outputFodler, composeCount, hashMethod, *zoomMin, *zoomMax)
 		return
 	}
 
