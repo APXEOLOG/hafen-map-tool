@@ -525,7 +525,7 @@ func main() {
 				}
 			}
 		}
-		sessionsJS += "\"" + SESSION_FOLDER + "/" + files[j].Name() + "\", "
+		sessionsJS += "\"" + strings.Replace(SESSION_FOLDER, "\\", "/", -1) + "/" + files[j].Name() + "\", "
 	}
 	sessionsJS += "];"
 	ioutil.WriteFile("session.js", []byte(sessionsJS), 0777)
